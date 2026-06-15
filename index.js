@@ -3,18 +3,17 @@ const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-const { makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys');
+const { makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 
-
 const { handleCommand } = require('./handler');
 const { addMessage, syncGroupMembers } = require('./commands/messagecount');
 const { handleGroupParticipants } = require('./commands/group');
 
-// Auto group scheduler (sesuaikan dengan milik Anda)
+// Auto group scheduler
 const AUTO_GROUP_FILE = path.join(__dirname, './data/autogroup.json');
 function startAutoGroupScheduler(sock) {
     setInterval(async () => {
@@ -44,39 +43,42 @@ function startAutoGroupScheduler(sock) {
 }
 
 async function startBot() {
- const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,   // QR muncul di log (cocok untuk Railway)
+        printQRInTerminal: true, // QR tetap muncul sebagai fallback
         browser: ['Ubuntu', 'Chrome', '22.04.4']
     });
-    // Tambahkan di atas sock.ev.on('connection.update', ...)
-// Ambil nomor dari environment variable RAILWAY_PHONE
-const phoneNumber = process.env.RAILWAY_PHONE;
-if (phoneNumber) {
-    console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
-    setTimeout(async () => {
-        try {
-            const code = await sock.requestPairingCode(phoneNumber);
-            console.log(`\n🔢 KODE PAIRING: ${code}\n`);
-            console.log('Masukkan kode ini di WhatsApp → Setelan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon');
-        } catch (err) {
-            console.error('Gagal minta pairing code:', err);
-        }
-    }, 3000); // delay 3 detik, tunggu koneksi stabil
-}
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-        if (qr) {
-            console.log('\n📱 SCAN QR CODE INI DENGAN WHATSAPP:\n');
+    // Event untuk pairing code (dilakukan setelah koneksi siap)
+    sock.ev.on('connection.update', async ({ connection, qr }) => {
+        // Jika QR muncul dan tidak menggunakan pairing code, tampilkan (fallback)
+        if (qr && !process.env.RAILWAY_PHONE) {
+            console.log('\n📱 SCAN QR CODE:\n');
             qrcode.generate(qr, { small: true });
-            console.log('\nAtau salin teks QR di atas dan scan dari perangkat lain.\n');
         }
+    });
 
+    // Minta pairing code jika nomor diberikan di env
+    const phoneNumber = process.env.RAILWAY_PHONE;
+    if (phoneNumber) {
+        console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
+        // Tunggu beberapa saat agar socket siap
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log(`\n🔢 KODE PAIRING: ${code}\n`);
+                console.log('Masukkan kode ini di WhatsApp → Setelan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon');
+            } catch (err) {
+                console.error('❌ Gagal meminta pairing code:', err);
+            }
+        }, 3000);
+    }
+
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
         if (connection === 'open') {
             console.log('✅ Bot terhubung ke WhatsApp!');
             startAutoGroupScheduler(sock);
@@ -92,12 +94,12 @@ if (phoneNumber) {
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
             console.log('❌ Koneksi terputus, status code:', statusCode);
             if (isLoggedOut) {
-                console.log('🚫 Logged out! Menghapus sesi dari MongoDB...');
-                await clear();
-                console.log('🔄 Restart bot untuk scan QR baru.');
-                startBot();
+                console.log('🚫 Logged out! Hapus folder auth_info dan restart bot.');
+                // Hapus folder auth_info jika perlu, tapi hati-hati
+                // fs.rmSync('./auth_info', { recursive: true, force: true });
+                process.exit(0);
             } else {
-                console.log('🔄 Reconnecting...');
+                console.log('🔄 Reconnecting in 5 seconds...');
                 setTimeout(startBot, 5000);
             }
         }
