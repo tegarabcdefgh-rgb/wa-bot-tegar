@@ -52,6 +52,21 @@ const { state, saveCreds } = await useMultiFileAuthState('auth_info');
         printQRInTerminal: true,   // QR muncul di log (cocok untuk Railway)
         browser: ['Ubuntu', 'Chrome', '22.04.4']
     });
+    // Tambahkan di atas sock.ev.on('connection.update', ...)
+// Ambil nomor dari environment variable RAILWAY_PHONE
+const phoneNumber = process.env.RAILWAY_PHONE;
+if (phoneNumber) {
+    console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
+    setTimeout(async () => {
+        try {
+            const code = await sock.requestPairingCode(phoneNumber);
+            console.log(`\n🔢 KODE PAIRING: ${code}\n`);
+            console.log('Masukkan kode ini di WhatsApp → Setelan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon');
+        } catch (err) {
+            console.error('Gagal minta pairing code:', err);
+        }
+    }, 3000); // delay 3 detik, tunggu koneksi stabil
+}
 
     sock.ev.on('creds.update', saveCreds);
 
