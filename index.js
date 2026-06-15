@@ -1,5 +1,6 @@
 require('dotenv').config()
-
+// Fix DNS untuk MongoDB Atlas
+const dns = require('dns'); dns.setDefaultResultOrder('ipv4first'); dns.setServers(['8.8.8.8', '1.1.1.1']);
 const { makeWASocket, DisconnectReason } = require('@whiskeysockets/baileys')
 const { Boom } = require('@hapi/boom')
 const qrcode = require('qrcode-terminal')
@@ -59,7 +60,7 @@ function startAutoGroupScheduler(sock) {
 // ─────────────────────────────────────────
 
 async function startBot() {
-    const { state, saveCreds } = await useMongoAuthState()
+    const { state, saveCreds, clear } = await useMongoAuthState()
 
     const sock = makeWASocket({
         auth: state,
@@ -71,10 +72,11 @@ async function startBot() {
 
     // ── Koneksi ──────────────────────────
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-        if (qr) {
-            console.log('\n📱 Scan QR berikut:\n')
-            qrcode.generate(qr, { small: true })
-        }
+
+      if (qr) {
+    console.log('\nQR:\n')
+    console.log(qr)
+}
 
         if (connection === 'open') {
             console.log('✅ Bot terhubung!')
@@ -88,16 +90,24 @@ async function startBot() {
         }
 
         if (connection === 'close') {
-            const shouldReconnect =
-                new Boom(lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut
+            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
+            const isLoggedOut = statusCode === DisconnectReason.loggedOut
 
-            console.log('❌ Koneksi terputus')
+            console.log('❌ Koneksi terputus, status code:', statusCode)
 
-            if (shouldReconnect) {
+            if (isLoggedOut) {
+                console.log('🚫 Logged out! Menghapus sesi dan meminta QR baru...')
+                try {
+                    await clear() // hapus semua sesi dari MongoDB
+                    console.log('🗑️  Sesi berhasil dihapus dari MongoDB')
+                } catch (err) {
+                    console.error('[CLEAR SESSION ERROR]', err)
+                }
+                console.log('🔄 Restart bot untuk scan QR baru...')
+                startBot() // restart dan minta QR baru
+            } else {
                 console.log('🔄 Reconnecting...')
                 startBot()
-            } else {
-                console.log('🚫 Logged out. Hapus folder auth_info dan scan ulang QR.')
             }
         }
     })

@@ -16,7 +16,7 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@tobyg74/tiktok-api-dl": "^1.1.4",
-    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "@whiskeysockets/baileys": "^6.7.22",
     "axios": "^1.17.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
