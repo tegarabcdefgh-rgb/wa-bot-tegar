@@ -4,108 +4,83 @@ const { initAuthCreds } = require('@whiskeysockets/baileys');
 const MONGODB_URI = process.env.MONGODB_URI;
 const COLLECTION_NAME = 'baileys_auth';
 
-if (!MONGODB_URI) {
-    throw new Error('MONGODB_URI is required for MongoDB session storage');
-}
+if (!MONGODB_URI) throw new Error('MONGODB_URI required');
 
 let client;
 let database;
 const locks = new Map();
 
-const lock = async (key, fn) => {
-    const previous = locks.get(key) || Promise.resolve();
+const lock = (key, fn) => {
+    const prev = locks.get(key) || Promise.resolve();
     let release;
     const next = new Promise((resolve) => { release = resolve; });
     locks.set(key, next);
-
-    try {
-        await previous;
-        return await fn();
-    } finally {
-        release();
-        if (locks.get(key) === next) {
-            locks.delete(key);
-        }
-    }
+    return prev.then(() => fn()).finally(() => { release(); if (locks.get(key) === next) locks.delete(key); });
 };
 
-const getDatabaseName = () => {
+const getDbName = () => {
     try {
         const url = new URL(MONGODB_URI);
-        const path = url.pathname?.replace(/^\//, '');
+        const path = url.pathname.replace(/^\//, '');
         return path || 'baileys';
-    }
-    catch {
-        return 'baileys';
-    }
+    } catch { return 'baileys'; }
 };
 
-const connectMongo = async () => {
-    if (!client) {
-        client = new MongoClient(MONGODB_URI);
-    }
-
+const connect = async () => {
+    if (!client) client = new MongoClient(MONGODB_URI);
     await client.connect();
-
-    if (!database) {
-        database = client.db(getDatabaseName());
-    }
+    if (!database) database = client.db(getDbName());
     return database;
 };
 
-const getCollection = async () => {
-    const db = await connectMongo();
+const getCol = async () => {
+    const db = await connect();
     return db.collection(COLLECTION_NAME);
 };
 
-const fixFileName = (file) => file?.replace(/\//g, '__').replace(/:/g, '-');
+// 🔧 Encode: semua Buffer jadi { __type: 'Buffer', data: base64 }
+const encode = (obj) => {
+    return JSON.stringify(obj, (k, v) => {
+        if (Buffer.isBuffer(v)) return { __type: 'Buffer', data: v.toString('base64') };
+        return v;
+    });
+};
+
+// 🔧 Decode: balikin jadi Buffer
+const decode = (str) => {
+    return JSON.parse(str, (k, v) => {
+        if (v && v.__type === 'Buffer') return Buffer.from(v.data, 'base64');
+        return v;
+    });
+};
+
+const fixFileName = (file) => file.replace(/\//g, '__').replace(/:/g, '-');
 
 const readData = async (file) => {
-    const collection = await getCollection();
-    const key = fixFileName(file);
-    const doc = await collection.findOne({ _id: key });
+    const col = await getCol();
+    const doc = await col.findOne({ _id: fixFileName(file) });
     if (!doc?.value) return null;
-    return JSON.parse(doc.value);
+    return decode(doc.value);
 };
 
 const writeData = async (data, file) => {
-    const collection = await getCollection();
-    const key = fixFileName(file);
-    const value = JSON.stringify(data);
-    await collection.updateOne(
-        { _id: key },
-        { $set: { value, updatedAt: new Date() } },
-        { upsert: true }
-    );
+    const col = await getCol();
+    const value = encode(data);
+    await col.updateOne({ _id: fixFileName(file) }, { $set: { value, updatedAt: new Date() } }, { upsert: true });
 };
 
 const removeData = async (file) => {
-    const collection = await getCollection();
-    const key = fixFileName(file);
-    await collection.deleteOne({ _id: key });
+    const col = await getCol();
+    await col.deleteOne({ _id: fixFileName(file) });
 };
 
-const readAuthData = async (file) => {
-    return lock(file, async () => {
-        return readData(file);
-    });
-};
-
-const writeAuthData = async (data, file) => {
-    return lock(file, async () => {
-        return writeData(data, file);
-    });
-};
-
-const deleteAuthData = async (file) => {
-    return lock(file, async () => {
-        return removeData(file);
-    });
-};
+const readAuthData = async (file) => lock(file, () => readData(file));
+const writeAuthData = async (data, file) => lock(file, () => writeData(data, file));
+const deleteAuthData = async (file) => lock(file, () => removeData(file));
 
 const clearAuthData = async () => {
-    const collection = await getCollection();
-    await collection.deleteMany({});
+    const col = await getCol();
+    await col.deleteMany({});
 };
 
 const useMongoAuthState = async () => {
@@ -129,23 +104,16 @@ const useMongoAuthState = async () => {
                         for (const id in data[category]) {
                             const value = data[category][id];
                             const file = `${category}-${id}.json`;
-                            if (value) {
-                                tasks.push(writeAuthData(value, file));
-                            } else {
-                                tasks.push(deleteAuthData(file));
-                            }
+                            if (value) tasks.push(writeAuthData(value, file));
+                            else tasks.push(deleteAuthData(file));
                         }
                     }
                     await Promise.all(tasks);
                 }
             }
         },
-        saveCreds: async () => {
-            return writeAuthData(creds, 'creds.json');
-        },
-        clear: async () => {
-            return clearAuthData();
-        }
+        saveCreds: async () => writeAuthData(creds, 'creds.json'),
+        clear: clearAuthData
     };
 };
 
