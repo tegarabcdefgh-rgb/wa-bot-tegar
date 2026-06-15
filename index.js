@@ -1,11 +1,6 @@
 require('dotenv').config();
-const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first');
-dns.setServers(['8.8.8.8', '1.1.1.1']);
-
 const { makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 
@@ -47,45 +42,46 @@ async function startBot() {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true, // QR tetap muncul sebagai fallback
+        printQRInTerminal: false, // Matikan QR total (pakai pairing code)
         browser: ['Ubuntu', 'Chrome', '22.04.4']
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Event untuk pairing code (dilakukan setelah koneksi siap)
-    sock.ev.on('connection.update', async ({ connection, qr }) => {
-        // Jika QR muncul dan tidak menggunakan pairing code, tampilkan (fallback)
-        if (qr && !process.env.RAILWAY_PHONE) {
-            console.log('\n📱 SCAN QR CODE:\n');
-            qrcode.generate(qr, { small: true });
-        }
-    });
-
-    // Minta pairing code jika nomor diberikan di env
-    const phoneNumber = process.env.RAILWAY_PHONE;
-    if (phoneNumber) {
-        console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
-        // Tunggu beberapa saat agar socket siap
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(phoneNumber);
-                console.log(`\n🔢 KODE PAIRING: ${code}\n`);
-                console.log('Masukkan kode ini di WhatsApp → Setelan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon');
-            } catch (err) {
-                console.error('❌ Gagal meminta pairing code:', err);
-            }
-        }, 3000);
-    }
+    let pairingRequested = false;
 
     sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
         if (connection === 'open') {
             console.log('✅ Bot terhubung ke WhatsApp!');
             startAutoGroupScheduler(sock);
-            // Sync grup
-            const groups = await sock.groupFetchAllParticipating();
-            for (const id in groups) {
-                await syncGroupMembers(id, groups[id].participants);
+            try {
+                const groups = await sock.groupFetchAllParticipating();
+                for (const id in groups) {
+                    await syncGroupMembers(id, groups[id].participants);
+                }
+            } catch (err) {
+                console.error('Sync grup error:', err);
+            }
+        }
+
+        // Minta pairing code jika belum terdaftar dan belum pernah minta
+        if (!state.creds.registered && !pairingRequested) {
+            const phoneNumber = process.env.PAIRING_PHONE;
+            if (phoneNumber) {
+                pairingRequested = true;
+                console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
+                setTimeout(async () => {
+                    try {
+                        const code = await sock.requestPairingCode(phoneNumber);
+                        console.log(`\n🔢 KODE PAIRING: ${code}\n`);
+                        console.log('Masukkan kode ini di WhatsApp → Setelan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon');
+                    } catch (err) {
+                        console.error('❌ Gagal meminta pairing code:', err);
+                        pairingRequested = false;
+                    }
+                }, 3000);
+            } else {
+                console.log('⚠️ PAIRING_PHONE tidak diset. Set environment variable PAIRING_PHONE dengan nomor WhatsApp.');
             }
         }
 
@@ -95,8 +91,6 @@ async function startBot() {
             console.log('❌ Koneksi terputus, status code:', statusCode);
             if (isLoggedOut) {
                 console.log('🚫 Logged out! Hapus folder auth_info dan restart bot.');
-                // Hapus folder auth_info jika perlu, tapi hati-hati
-                // fs.rmSync('./auth_info', { recursive: true, force: true });
                 process.exit(0);
             } else {
                 console.log('🔄 Reconnecting in 5 seconds...');
