@@ -6,10 +6,10 @@
   "directories": {
     "lib": "lib"
   },
-"scripts": {
-  "start": "node index.js",
-  "test": "echo \"Error: no test specified\" && exit 1"
-},
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tegarabcdefgh-rgb/wa-bot-tegar.git"
@@ -28,6 +28,7 @@
     "@whiskeysockets/baileys": "^7.0.0-rc13",
     "axios": "^1.18.0",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "ffmpeg-static": "^5.3.0",
     "fluent-ffmpeg": "^2.1.3",
     "mongodb": "^7.3.0",

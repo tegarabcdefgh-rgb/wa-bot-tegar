@@ -3,7 +3,8 @@ const { makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whis
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
-
+const express = require('express');
+const app = express();
 const { handleCommand } = require('./handler');
 const { addMessage, syncGroupMembers } = require('./commands/messagecount');
 const { handleGroupParticipants } = require('./commands/group');
@@ -138,3 +139,13 @@ async function startBot() {
 }
 
 startBot();
+
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('WhatsApp Bot Running');
+});
+
+app.listen(PORT, () => {
+    console.log(`Web server aktif di port ${PORT}`);
+});
