@@ -70,25 +70,33 @@ async function startBot() {
         }
 
         // Minta pairing code jika belum terdaftar dan belum pernah minta
-        if (!state.creds.registered && !pairingRequested) {
-            const phoneNumber = process.env.PAIRING_PHONE;
-            if (phoneNumber) {
-                pairingRequested = true;
-                console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
-                setTimeout(async () => {
-                    try {
-                        const code = await sock.requestPairingCode(phoneNumber);
-                        console.log(`\n🔢 KODE PAIRING: ${code}\n`);
-                        console.log('Masukkan kode ini di WhatsApp → Setelan → Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon');
-                    } catch (err) {
-                        console.error('❌ Gagal meminta pairing code:', err);
-                        pairingRequested = false;
-                    }
-                }, 3000);
-            } else {
-                console.log('⚠️ PAIRING_PHONE tidak diset. Set environment variable PAIRING_PHONE dengan nomor WhatsApp.');
-            }
+      if (!sock.authState?.creds?.registered && !pairingRequested) {
+    const phoneNumber = process.env.PAIRING_PHONE;
+
+    if (phoneNumber) {
+        pairingRequested = true;
+
+        try {
+            console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
+
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            const code = await sock.requestPairingCode(phoneNumber);
+
+            console.log('\n====================');
+            console.log('🔢 KODE PAIRING:', code);
+            console.log('====================\n');
+
+            console.log(
+                'WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon'
+            );
+
+        } catch (err) {
+            console.error('❌ Pairing gagal:', err);
+            pairingRequested = false;
         }
+    }
+}
 
         if (connection === 'close') {
             const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
