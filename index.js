@@ -11,8 +11,18 @@ const { handleGroupParticipants } = require('./commands/group');
 
 // Auto group scheduler
 const AUTO_GROUP_FILE = path.join(__dirname, './data/autogroup.json');
+
+// Simpan interval id di luar fungsi supaya bisa di-clear saat reconnect,
+// mencegah interval numpuk tiap kali koneksi dibuka ulang.
+let autoGroupInterval = null;
+
 function startAutoGroupScheduler(sock) {
-    setInterval(async () => {
+    if (autoGroupInterval) {
+        clearInterval(autoGroupInterval);
+        autoGroupInterval = null;
+    }
+
+    autoGroupInterval = setInterval(async () => {
         try {
             if (!fs.existsSync(AUTO_GROUP_FILE)) return;
             const data = JSON.parse(fs.readFileSync(AUTO_GROUP_FILE, 'utf8'));
@@ -39,11 +49,10 @@ function startAutoGroupScheduler(sock) {
 }
 
 async function startBot() {
-     console.log("🚀 startBot dijalankan");
+    console.log("🚀 startBot dijalankan");
     console.log("PAIRING_PHONE =", process.env.PAIRING_PHONE);
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    
 
     const sock = makeWASocket({
         auth: state,
@@ -53,96 +62,99 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
-   let pairingRequested = false;
-let refreshInterval = null;
+    let pairingRequested = false;
+    let refreshInterval = null;
 
-function mulaiCountdown(detik) {
-    let sisa = detik;
-    process.stdout.write(`   ⏱ Kode baru dalam: ${sisa} detik`);
+    function mulaiCountdown(detik) {
+        let sisa = detik;
+        process.stdout.write(`   ⏱ Kode baru dalam: ${sisa} detik`);
 
-    const interval = setInterval(() => {
-        sisa--;
-        process.stdout.write(`\r   ⏱ Kode baru dalam: ${sisa} detik`);
+        const interval = setInterval(() => {
+            sisa--;
+            process.stdout.write(`\r   ⏱ Kode baru dalam: ${sisa} detik`);
 
-        if (sisa <= 0) {
-            clearInterval(interval);
-        }
-    }, 1000);
-}
-// Di dalam startBot()
-const phoneNumber = process.env.PAIRING_PHONE; // ambil dari env
-
-async function mintaPairingCode() {
-    try {
-        if (!phoneNumber) {
-            console.error('❌ PAIRING_PHONE tidak diatur di .env');
-            return;
-        }
-        console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
-        const code = await sock.requestPairingCode(phoneNumber);
-        const formatCode = code.match(/.{1,4}/g)?.join('-') || code;
-        console.log('\n====================');
-        console.log('🔢 KODE PAIRING:', formatCode);
-        console.log('====================\n');
-        console.log('WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon');
-        mulaiCountdown(55);
-    } catch (err) {
-        console.error('❌ Pairing gagal:', err.message);
-        pairingRequested = false;
-        // Jika error karena timeout, mungkin perlu refresh
-    }
-}
-
-// Event connection.update
-sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-    if (connection === 'open') {
-        console.log('✅ Bot terhubung ke WhatsApp!');
-        // Hentikan interval pairing jika masih berjalan
-        if (refreshInterval) {
-            clearInterval(refreshInterval);
-            refreshInterval = null;
-        }
-        pairingRequested = true; // tandai sudah minta pairing (tidak perlu lagi)
-        startAutoGroupScheduler(sock);
-        // sync grup ...
+            if (sisa <= 0) {
+                clearInterval(interval);
+            }
+        }, 1000);
     }
 
-    // Pairing code (hanya jika belum terdaftar dan belum diminta)
-    if (!state.creds.registered && !pairingRequested) {
-        pairingRequested = true;
-        // Delay kecil (2 detik) agar socket stabil
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        await mintaPairingCode();
+    // Di dalam startBot()
+    const phoneNumber = process.env.PAIRING_PHONE; // ambil dari env
 
-        // Interval untuk refresh kode (jika belum terdaftar)
-        refreshInterval = setInterval(async () => {
-            if (state.creds.registered) {
-                clearInterval(refreshInterval);
-                refreshInterval = null;
+    async function mintaPairingCode() {
+        try {
+            if (!phoneNumber) {
+                console.error('❌ PAIRING_PHONE tidak diatur di .env');
                 return;
             }
-            await mintaPairingCode();
-        }, 55000);
-    }
-
-    if (connection === 'close') {
-        const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-        console.log('❌ Koneksi terputus, status code:', statusCode);
-        if (isLoggedOut || statusCode === 401) {
-            console.log('🚫 Logged out atau unauthorized! Hapus folder auth_info dan restart bot.');
-            // Hapus folder auth_info secara otomatis (hati-hati)
-            // fs.rmSync('auth_info', { recursive: true, force: true });
-            process.exit(0);
-        } else {
-            // Untuk kode 408 atau lainnya, hapus dulu auth_info yang korup?
-            console.log('🔄 Menghapus auth_info yang bermasalah dan reconnect...');
-            fs.rmSync('auth_info', { recursive: true, force: true });
-            console.log('🔄 Reconnecting in 5 seconds...');
-            setTimeout(startBot, 5000);
+            console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
+            const code = await sock.requestPairingCode(phoneNumber);
+            const formatCode = code.match(/.{1,4}/g)?.join('-') || code;
+            console.log('\n====================');
+            console.log('🔢 KODE PAIRING:', formatCode);
+            console.log('====================\n');
+            console.log('WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon');
+            mulaiCountdown(55);
+        } catch (err) {
+            console.error('❌ Pairing gagal:', err.message);
+            pairingRequested = false;
+            // Jika error karena timeout, mungkin perlu refresh
         }
     }
-});
+
+    // Event connection.update
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+        if (connection === 'open') {
+            console.log('✅ Bot terhubung ke WhatsApp!');
+            // Hentikan interval pairing jika masih berjalan
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+            pairingRequested = true; // tandai sudah minta pairing (tidak perlu lagi)
+            startAutoGroupScheduler(sock);
+            // sync grup ...
+        }
+
+        // Pairing code (hanya jika belum terdaftar dan belum diminta)
+        if (!state.creds.registered && !pairingRequested) {
+            pairingRequested = true;
+            // Delay kecil (2 detik) agar socket stabil
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            await mintaPairingCode();
+
+            // Interval untuk refresh kode (jika belum terdaftar)
+            refreshInterval = setInterval(async () => {
+                if (state.creds.registered) {
+                    clearInterval(refreshInterval);
+                    refreshInterval = null;
+                    return;
+                }
+                await mintaPairingCode();
+            }, 55000);
+        }
+
+        if (connection === 'close') {
+            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+            console.log('❌ Koneksi terputus, status code:', statusCode);
+
+            if (isLoggedOut || statusCode === 401) {
+                // Sesi memang invalid (logout/unauthorized) -> auth_info WAJIB dihapus
+                // supaya proses pairing bisa diminta ulang dari awal.
+                console.log('🚫 Logged out atau unauthorized! Menghapus auth_info...');
+                fs.rmSync('auth_info', { recursive: true, force: true });
+                process.exit(0);
+            } else {
+                // Disconnect biasa/sementara (mis. restart required, koneksi putus)
+                // -> JANGAN hapus auth_info, cukup reconnect. Menghapusnya di sini
+                // akan memaksa pairing ulang tiap kali koneksi sedikit terganggu.
+                console.log('🔄 Koneksi terputus sementara, reconnect tanpa hapus auth_info...');
+                setTimeout(startBot, 5000);
+            }
+        }
+    });
 
     sock.ev.on('group-participants.update', async (update) => {
         try {
