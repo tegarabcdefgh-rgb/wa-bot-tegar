@@ -39,6 +39,10 @@ function startAutoGroupScheduler(sock) {
 }
 
 async function startBot() {
+     console.log("🚀 startBot dijalankan");
+    console.log("PAIRING_PHONE =", process.env.PAIRING_PHONE);
+
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
