@@ -53,51 +53,84 @@ async function startBot() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    let pairingRequested = false;
+   let pairingRequested = false;
+let refreshInterval = null;
 
-    sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-        if (connection === 'open') {
-            console.log('✅ Bot terhubung ke WhatsApp!');
-            startAutoGroupScheduler(sock);
-            try {
-                const groups = await sock.groupFetchAllParticipating();
-                for (const id in groups) {
-                    await syncGroupMembers(id, groups[id].participants);
-                }
-            } catch (err) {
-                console.error('Sync grup error:', err);
-            }
+function mulaiCountdown(detik) {
+    let sisa = detik;
+    process.stdout.write(`   ⏱ Kode baru dalam: ${sisa} detik`);
+
+    const interval = setInterval(() => {
+        sisa--;
+        process.stdout.write(`\r   ⏱ Kode baru dalam: ${sisa} detik`);
+
+        if (sisa <= 0) {
+            clearInterval(interval);
         }
+    }, 1000);
+}
 
-        // Minta pairing code jika belum terdaftar dan belum pernah minta
-      if (!sock.authState?.creds?.registered && !pairingRequested) {
-    const phoneNumber = process.env.PAIRING_PHONE;
+async function mintaPairingCode() {
+    try {
+        const phoneNumber = '6285767121372';
 
-    if (phoneNumber) {
-        pairingRequested = true;
+        console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
 
-        try {
-            console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
+        const code = await sock.requestPairingCode(phoneNumber);
 
-            await new Promise(resolve => setTimeout(resolve, 5000));
+        const formatCode = code.match(/.{1,4}/g)?.join('-') || code;
 
-            const code = await sock.requestPairingCode(phoneNumber);
+        console.log('\n====================');
+        console.log('🔢 KODE PAIRING:', formatCode);
+        console.log('====================\n');
 
-            console.log('\n====================');
-            console.log('🔢 KODE PAIRING:', code);
-            console.log('====================\n');
+        console.log(
+            'WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon'
+        );
 
-            console.log(
-                'WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon'
-            );
+        mulaiCountdown(55);
 
-        } catch (err) {
-            console.error('❌ Pairing gagal:', err);
-            pairingRequested = false;
-        }
+    } catch (err) {
+        console.error('❌ Pairing gagal:', err.message);
+        pairingRequested = false;
     }
 }
 
+
+sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+
+    if (connection === 'open') {
+        console.log('✅ Bot terhubung ke WhatsApp!');
+        startAutoGroupScheduler(sock);
+
+        try {
+            const groups = await sock.groupFetchAllParticipating();
+            for (const id in groups) {
+                await syncGroupMembers(id, groups[id].participants);
+            }
+        } catch (err) {
+            console.error('Sync grup error:', err);
+        }
+    }
+
+
+    // Pairing code
+    if (!state.creds.registered && !pairingRequested) {
+
+        pairingRequested = true;
+
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
+        await mintaPairingCode();
+
+        refreshInterval = setInterval(async () => {
+            if (!state.creds.registered) {
+                await mintaPairingCode();
+            } else {
+                clearInterval(refreshInterval);
+            }
+        }, 55000);
+    }
         if (connection === 'close') {
             const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
