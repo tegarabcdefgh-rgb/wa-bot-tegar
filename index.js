@@ -43,7 +43,7 @@ async function startBot() {
     console.log("PAIRING_PHONE =", process.env.PAIRING_PHONE);
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    
 
     const sock = makeWASocket({
         auth: state,
