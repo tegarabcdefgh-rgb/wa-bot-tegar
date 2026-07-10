@@ -58,7 +58,7 @@ app.get('/api/download-video', (req, res) => {
 
     // Stream output directly from yt-dlp to response
     // Use output to stdout with `-o -` and binary mode
-    const args = ['-f', 'mp4', '-o', '-', videoUrl];
+    const args = [ '-f','best','-o','-',videoUrl];
     const ytdlpProc = spawn(ytdlp, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     // Set headers for download
