@@ -42,7 +42,8 @@ function videoToAnimatedSticker(inputBuffer, ext = 'mp4') {
 
     // ffmpeg: resize ke 512x512, max 6 detik, 15fps
     const cmd = `"${ffmpegPath}" -i "${inputPath}" -vf "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0,fps=15" -loop 0 -ss 00:00:00 -t 00:00:06 -preset default -an -vsync 0 -s 512:512 "${outputPath}" -y`
-
+    console.log('FFMPEG PATH:', ffmpegPath)
+    
     exec(cmd, (err) => {
       // Hapus file input sementara
       try { fs.unlinkSync(inputPath) } catch (_) {}
@@ -280,6 +281,30 @@ async function handleSticker(sock, msg, from, args) {
     await sock.sendMessage(from, { react: { text: '✅', key: msg.key } })
     return
   }
+// ── Kasus 2B: Kirim video langsung dengan caption !stiker ──
+if (msgType === 'videoMessage') {
+  await sock.sendMessage(from, {
+    react: { text: '⏳', key: msg.key }
+  })
+
+  await sock.sendMessage(from, {
+    text: '⏳ Memproses stiker animasi, harap tunggu...'
+  }, { quoted: msg })
+
+  const buffer = await downloadMedia(sock, msg)
+  const webp = await videoToAnimatedSticker(buffer, 'mp4')
+
+  await sock.sendMessage(from, {
+    sticker: webp,
+    mimetype: 'image/webp'
+  })
+
+  await sock.sendMessage(from, {
+    react: { text: '✅', key: msg.key }
+  })
+
+  return
+}
 
   // ── Kasus 3: URL gambar dari argumen ──
   const urlArg = args.find(a => a.startsWith('http'))
