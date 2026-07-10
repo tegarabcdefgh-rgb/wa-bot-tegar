@@ -69,81 +69,80 @@ function mulaiCountdown(detik) {
         }
     }, 1000);
 }
+// Di dalam startBot()
+const phoneNumber = process.env.PAIRING_PHONE; // ambil dari env
 
 async function mintaPairingCode() {
     try {
-        const phoneNumber = '6285767121372';
-
+        if (!phoneNumber) {
+            console.error('❌ PAIRING_PHONE tidak diatur di .env');
+            return;
+        }
         console.log(`📱 Meminta pairing code untuk ${phoneNumber}...`);
-
         const code = await sock.requestPairingCode(phoneNumber);
-
         const formatCode = code.match(/.{1,4}/g)?.join('-') || code;
-
         console.log('\n====================');
         console.log('🔢 KODE PAIRING:', formatCode);
         console.log('====================\n');
-
-        console.log(
-            'WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon'
-        );
-
+        console.log('WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon');
         mulaiCountdown(55);
-
     } catch (err) {
         console.error('❌ Pairing gagal:', err.message);
         pairingRequested = false;
+        // Jika error karena timeout, mungkin perlu refresh
     }
 }
 
-
+// Event connection.update
 sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-
     if (connection === 'open') {
         console.log('✅ Bot terhubung ke WhatsApp!');
-        startAutoGroupScheduler(sock);
-
-        try {
-            const groups = await sock.groupFetchAllParticipating();
-            for (const id in groups) {
-                await syncGroupMembers(id, groups[id].participants);
-            }
-        } catch (err) {
-            console.error('Sync grup error:', err);
+        // Hentikan interval pairing jika masih berjalan
+        if (refreshInterval) {
+            clearInterval(refreshInterval);
+            refreshInterval = null;
         }
+        pairingRequested = true; // tandai sudah minta pairing (tidak perlu lagi)
+        startAutoGroupScheduler(sock);
+        // sync grup ...
     }
 
-
-    // Pairing code
+    // Pairing code (hanya jika belum terdaftar dan belum diminta)
     if (!state.creds.registered && !pairingRequested) {
-
         pairingRequested = true;
-
-        await new Promise(resolve => setTimeout(resolve, 10000));
-
+        // Delay kecil (2 detik) agar socket stabil
+        await new Promise(resolve => setTimeout(resolve, 2000));
         await mintaPairingCode();
 
+        // Interval untuk refresh kode (jika belum terdaftar)
         refreshInterval = setInterval(async () => {
-            if (!state.creds.registered) {
-                await mintaPairingCode();
-            } else {
+            if (state.creds.registered) {
                 clearInterval(refreshInterval);
+                refreshInterval = null;
+                return;
             }
+            await mintaPairingCode();
         }, 55000);
     }
-        if (connection === 'close') {
-            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-            const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-            console.log('❌ Koneksi terputus, status code:', statusCode);
-            if (isLoggedOut) {
-                console.log('🚫 Logged out! Hapus folder auth_info dan restart bot.');
-                process.exit(0);
-            } else {
-                console.log('🔄 Reconnecting in 5 seconds...');
-                setTimeout(startBot, 5000);
-            }
+
+    if (connection === 'close') {
+        const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+        console.log('❌ Koneksi terputus, status code:', statusCode);
+        if (isLoggedOut || statusCode === 401) {
+            console.log('🚫 Logged out atau unauthorized! Hapus folder auth_info dan restart bot.');
+            // Hapus folder auth_info secara otomatis (hati-hati)
+            // fs.rmSync('auth_info', { recursive: true, force: true });
+            process.exit(0);
+        } else {
+            // Untuk kode 408 atau lainnya, hapus dulu auth_info yang korup?
+            console.log('🔄 Menghapus auth_info yang bermasalah dan reconnect...');
+            fs.rmSync('auth_info', { recursive: true, force: true });
+            console.log('🔄 Reconnecting in 5 seconds...');
+            setTimeout(startBot, 5000);
         }
-    });
+    }
+});
 
     sock.ev.on('group-participants.update', async (update) => {
         try {
