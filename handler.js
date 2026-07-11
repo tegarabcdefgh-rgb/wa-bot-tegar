@@ -5,6 +5,7 @@ const { handleSticker }                          = require('./commands/sticker')
 const { handleGroup }                            = require('./commands/group')
 const { handleTebakKata, handleAyoTebak }        = require('./commands/tebakkata')
 const { handleTikTok }                           = require('./commands/tiktok')
+const { handleInstagram }                        = require('./commands/instagram')
 const { handleSiapaAku, handleAyoTebakSiapa }    = require('./commands/tebaksiapaaku')
 const { handleTebakEmoji, handleAyoTebakEmoji }  = require('./commands/tebakemoji')
 const { handleKuis, handleJawabKuis }            = require('./commands/kuismtk')
@@ -57,6 +58,7 @@ const MENU_TEXT = `👾💜 *KIM JU-EUN (JUUN)* 💜👾
 👾 *DOWNLOAD*
 - !tiktok <link>
 - !tt <link>
+- !ig <link> — foto/video Instagram
 
 👾 *AUTO GROUP*
 - !autogroup
@@ -169,11 +171,15 @@ async function handleCommand(sock, msg, from, body, senderName) {
                     '💜 Kim Ju-eun siap membantu Anda.\n\n' +
                     'Ketik *!menu* untuk melihat fitur yang tersedia.'
             })
-case 'gacha':
-    return handleGacha(sock, msg, from, cmd, args, senderName);
+        case 'gacha':
+            return handleGacha(sock, msg, from, cmd, args, senderName);
+
         // ── Menu / Help ──────────────────────
+        // BUG SEBELUMNYA: case 'he  lp' punya dua spasi di tengah (typo),
+        // jadi tidak pernah cocok dengan cmd = 'help' hasil parsing -> !help
+        // tidak pernah merespons. Sudah diperbaiki jadi 'help'.
         case 'menu':
-        case 'he  lp': {
+        case 'help': {
             const menuDir    = path.join(__dirname, 'assets', 'menu')
             const assetsDir  = path.join(__dirname, 'assets')
             let imageBuffer  = null
@@ -206,6 +212,10 @@ case 'gacha':
         case 'tiktok':
         case 'tt':
             return handleTikTok(sock, msg, from, args)
+
+        case 'ig':
+        case 'instagram':
+            return handleInstagram(sock, msg, from, args)
 
         // ── Manajemen Grup ───────────────────
         case 'kick':

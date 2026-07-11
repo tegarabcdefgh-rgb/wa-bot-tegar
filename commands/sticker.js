@@ -43,7 +43,7 @@ function videoToAnimatedSticker(inputBuffer, ext = 'mp4') {
     // ffmpeg: resize ke 512x512, max 6 detik, 15fps
     const cmd = `"${ffmpegPath}" -i "${inputPath}" -vf "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0,fps=15" -loop 0 -ss 00:00:00 -t 00:00:06 -preset default -an -vsync 0 -s 512:512 "${outputPath}" -y`
     console.log('FFMPEG PATH:', ffmpegPath)
-    
+
     exec(cmd, (err) => {
       // Hapus file input sementara
       try { fs.unlinkSync(inputPath) } catch (_) {}
@@ -230,20 +230,23 @@ async function handleSticker(sock, msg, from, args) {
   const crop = args.includes('--crop') || args.includes('-c')
   const stickerOptions = { packName: 'Bot Stiker', authorName: 'WA Bot', crop }
 
-  // ── Kasus 1: Reply ke pesan gambar ──
+  // ── Kasus 1: Reply ke pesan gambar/video/GIF ──
   if (quoted) {
     const quotedType = Object.keys(quoted)[0]
+
+    // Bangun objek "pesan quoted" yang valid SEKALI saja, dengan urutan
+    // properti yang benar (message: quoted harus di baris TERAKHIR supaya
+    // tidak ketimpa oleh ...msg). Dipakai bareng untuk gambar & video/GIF.
+    const quotedMsg = {
+      ...msg,
+      key: { ...msg.key, id: msg.message.extendedTextMessage.contextInfo.stanzaId },
+      message: quoted,
+    }
 
     if (quotedType === 'imageMessage') {
       await sock.sendMessage(from, { react: { text: '⏳', key: msg.key } })
 
-      const quotedMsg = {
-        ...msg,
-        message: quoted,
-        key: { ...msg.key, id: msg.message.extendedTextMessage.contextInfo.stanzaId },
-      }
-
-      const buffer = await downloadMedia(sock, { message: quoted, ...quotedMsg })
+      const buffer = await downloadMedia(sock, quotedMsg)
       const webp = await imageToSticker(buffer, stickerOptions)
 
       await sock.sendMessage(from, {
@@ -258,8 +261,14 @@ async function handleSticker(sock, msg, from, args) {
       await sock.sendMessage(from, { react: { text: '⏳', key: msg.key } })
       await sock.sendMessage(from, { text: '⏳ Memproses stiker animasi, harap tunggu...' }, { quoted: msg })
 
+      // BUG SEBELUMNYA: downloadMedia(sock, { message: quoted, ...msg })
+      // -> ...msg disebar SETELAH message: quoted, sehingga msg.message
+      // (isi pesan reply, bukan video) menimpa balik `quoted`. Akibatnya
+      // Baileys mencoba download media dari pesan yang salah dan selalu
+      // gagal -> makanya stiker animasi dari reply tidak pernah jadi.
+      // Sekarang pakai quotedMsg yang sudah dibangun dengan urutan benar.
       const ext = quotedType === 'gifMessage' ? 'gif' : 'mp4'
-      const buffer = await downloadMedia(sock, { message: quoted, ...msg })
+      const buffer = await downloadMedia(sock, quotedMsg)
       const webp = await videoToAnimatedSticker(buffer, ext)
 
       await sock.sendMessage(from, {
@@ -281,44 +290,71 @@ async function handleSticker(sock, msg, from, args) {
     await sock.sendMessage(from, { react: { text: '✅', key: msg.key } })
     return
   }
-// ── Kasus 2B: Kirim video langsung dengan caption !stiker ──
-if (msgType === 'videoMessage') {
-  await sock.sendMessage(from, {
-    react: { text: '⏳', key: msg.key }
-  })
 
-  await sock.sendMessage(from, {
-    text: '⏳ Memproses stiker animasi, harap tunggu...'
-  }, { quoted: msg })
+  // ── Kasus 2B: Kirim video langsung dengan caption !stiker ──
+  if (msgType === 'videoMessage') {
+    await sock.sendMessage(from, {
+      react: { text: '⏳', key: msg.key }
+    })
 
-  const buffer = await downloadMedia(sock, msg)
-  const webp = await videoToAnimatedSticker(buffer, 'mp4')
+    await sock.sendMessage(from, {
+      text: '⏳ Memproses stiker animasi, harap tunggu...'
+    }, { quoted: msg })
 
-  await sock.sendMessage(from, {
-    sticker: webp,
-    mimetype: 'image/webp'
-  })
+    const buffer = await downloadMedia(sock, msg)
+    const webp = await videoToAnimatedSticker(buffer, 'mp4')
 
-  await sock.sendMessage(from, {
-    react: { text: '✅', key: msg.key }
-  })
+    await sock.sendMessage(from, {
+      sticker: webp,
+      mimetype: 'image/webp'
+    })
 
-  return
-}
+    await sock.sendMessage(from, {
+      react: { text: '✅', key: msg.key }
+    })
+
+    return
+  }
 
   // ── Kasus 3: URL gambar dari argumen ──
   const urlArg = args.find(a => a.startsWith('http'))
   if (urlArg) {
     try {
       await sock.sendMessage(from, { react: { text: '⏳', key: msg.key } })
-      const res = await axios.get(urlArg, { responseType: 'arraybuffer', timeout: 10000 })
+
+      // BUG SEBELUMNYA: tidak ada header User-Agent -> banyak situs/CDN
+      // (mis. Pinterest, Instagram, beberapa image host) menolak request
+      // tanpa User-Agent browser dan membalas 403 / halaman HTML, bukan
+      // gambar. sharp() lalu gagal decode buffer itu, tapi error aslinya
+      // ketutup karena "catch {}" tidak menangkap err sama sekali.
+      const res = await axios.get(urlArg, {
+        responseType: 'arraybuffer',
+        timeout: 15000,
+        maxRedirects: 5,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        },
+      })
+
+      const contentType = res.headers['content-type'] || ''
+      if (!contentType.startsWith('image/')) {
+        throw new Error(`URL tidak mengembalikan gambar (content-type: ${contentType || 'tidak diketahui'})`)
+      }
+
       const buffer = Buffer.from(res.data)
       const webp = await imageToSticker(buffer, stickerOptions)
 
       await sock.sendMessage(from, { sticker: webp, mimetype: 'image/webp' })
       await sock.sendMessage(from, { react: { text: '✅', key: msg.key } })
-    } catch {
-      await sock.sendMessage(from, { text: '❌ Gagal mengambil gambar dari URL.' }, { quoted: msg })
+    } catch (err) {
+      // Log penyebab asli ke console supaya gampang di-debug,
+      // dan kasih pesan yang lebih jelas ke user.
+      console.error('[STICKER URL ERROR]', err.message)
+      await sock.sendMessage(from, {
+        text: `❌ Gagal mengambil gambar dari URL.\n(${err.message})`,
+      }, { quoted: msg })
     }
     return
   }

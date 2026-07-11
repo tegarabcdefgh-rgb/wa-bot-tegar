@@ -4,6 +4,17 @@ function formatNumber(num) {
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+// BUG SEBELUMNYA: URL API di-hardcode ke http://localhost:3000, padahal
+// tiktok-api dan bot WA ini adalah DUA SERVICE TERPISAH di Railway.
+// "localhost" di container bot cuma merujuk ke dirinya sendiri, tidak
+// pernah bisa menjangkau service tiktok-api -> itu sebabnya request selalu
+// kena express bot sendiri (404 HTML) alih-alih tiktok-api yang sebenarnya.
+//
+// Sekarang base URL diambil dari environment variable TIKTOK_API_URL,
+// yang diisi dengan URL publik/internal service tiktok-api di Railway.
+// Set di Variables bot: TIKTOK_API_URL=https://tiktok-api-production.up.railway.app
+const TIKTOK_API_BASE = process.env.TIKTOK_API_URL || 'http://localhost:3000';
+
 async function handleTikTok(sock, msg, from, args) {
     if (!args[0]) {
         return sock.sendMessage(from, { text: `❌ Masukkan link TikTok.\nContoh: !tiktok https://vt.tiktok.com/xxxx` }, { quoted: msg });
@@ -16,13 +27,23 @@ async function handleTikTok(sock, msg, from, args) {
 
     try {
         // 1. Ambil metadata dari API
-        const metaUrl = `http://localhost:3000/api/download-tiktok?url=${encodeURIComponent(videoUrl)}`;
+        const metaUrl = `${TIKTOK_API_BASE}/api/download-tiktok?url=${encodeURIComponent(videoUrl)}`;
         const metaRes = await fetch(metaUrl);
+
+        const contentType = metaRes.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            // Kalau bukan JSON, kemungkinan besar TIKTOK_API_URL salah/belum
+            // di-set, atau service tiktok-api belum jalan/tidak terjangkau.
+            throw new Error(
+                `API TikTok tidak merespons dengan JSON (kemungkinan URL/endpoint salah atau service belum aktif). Base URL saat ini: ${TIKTOK_API_BASE}`
+            );
+        }
+
         const meta = await metaRes.json();
         if (!metaRes.ok || meta.status !== 'success') throw new Error(meta.error || 'Gagal ambil metadata');
 
         // 2. Unduh video dari endpoint download-video
-        const videoEndpoint = `http://localhost:3000/api/download-video?url=${encodeURIComponent(videoUrl)}`;
+        const videoEndpoint = `${TIKTOK_API_BASE}/api/download-video?url=${encodeURIComponent(videoUrl)}`;
         const videoRes = await fetch(videoEndpoint);
         if (!videoRes.ok) throw new Error(`Gagal unduh video: ${videoRes.status}`);
         const videoBuffer = Buffer.from(await videoRes.arrayBuffer());

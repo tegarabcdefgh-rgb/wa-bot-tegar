@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
@@ -48,14 +48,71 @@ function startAutoGroupScheduler(sock) {
     }, 60000);
 }
 
+// Timer countdown pairing code disimpan global supaya tidak numpuk.
+// Sebelumnya `interval` adalah variabel lokal di dalam mulaiCountdown(),
+// jadi tiap kali fungsi ini dipanggil ulang, interval lama TIDAK pernah
+// di-clear -> beberapa countdown jalan bersamaan dan angka di terminal
+// jadi lompat-lompat / berubah-ubah.
+let countdownInterval = null;
+
+function mulaiCountdown(detik) {
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+    }
+
+    let sisa = detik;
+    process.stdout.write(`   ⏱ Kode baru dalam: ${sisa} detik`);
+
+    countdownInterval = setInterval(() => {
+        sisa--;
+        process.stdout.write(`\r   ⏱ Kode baru dalam: ${sisa} detik`);
+
+        if (sisa <= 0) {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+        }
+    }, 1000);
+}
+
+// Mencegah beberapa instance startBot() jalan bersamaan (mis. dipanggil
+// dari beberapa setTimeout yang menumpuk saat koneksi gagal berulang kali).
+let botStarting = false;
+
+// Hitung berapa kali gagal connect berturut-turut selagi BELUM registered.
+// Dipakai untuk backoff -> supaya tidak spam request pairing code ke
+// WhatsApp dalam waktu singkat (itu yang memicu server menolak dengan 405).
+let unregisteredFailCount = 0;
+
 async function startBot() {
+    if (botStarting) {
+        console.log('⏳ startBot() sudah berjalan, lewati pemanggilan ganda...');
+        return;
+    }
+    botStarting = true;
+
     console.log("🚀 startBot dijalankan");
     console.log("PAIRING_PHONE =", process.env.PAIRING_PHONE);
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
+    // FIX untuk bug "405 Connection Failure" saat pairing (lihat GitHub
+    // WhiskeySockets/Baileys issue #2370). Baileys butuh nomor versi
+    // WhatsApp Web yang sesuai dengan yang sedang dipakai server WA saat
+    // ini -> ambil otomatis lewat fetchLatestBaileysVersion(), jangan
+    // biarkan Baileys pakai default bawaannya yang bisa basi.
+    let waVersion;
+    try {
+        const versionInfo = await fetchLatestBaileysVersion();
+        waVersion = versionInfo.version;
+        console.log('ℹ️  Menggunakan WA Web version:', waVersion, '| terbaru:', versionInfo.isLatest);
+    } catch (err) {
+        console.error('⚠️ Gagal mengambil versi WA terbaru, lanjut pakai default:', err.message);
+    }
+
     const sock = makeWASocket({
         auth: state,
+        version: waVersion, // penting: mencegah 405 Connection Failure
         printQRInTerminal: false, // Matikan QR total (pakai pairing code)
         browser: ['Ubuntu', 'Chrome', '22.04.4']
     });
@@ -64,20 +121,6 @@ async function startBot() {
 
     let pairingRequested = false;
     let refreshInterval = null;
-
-    function mulaiCountdown(detik) {
-        let sisa = detik;
-        process.stdout.write(`   ⏱ Kode baru dalam: ${sisa} detik`);
-
-        const interval = setInterval(() => {
-            sisa--;
-            process.stdout.write(`\r   ⏱ Kode baru dalam: ${sisa} detik`);
-
-            if (sisa <= 0) {
-                clearInterval(interval);
-            }
-        }, 1000);
-    }
 
     // Di dalam startBot()
     const phoneNumber = process.env.PAIRING_PHONE; // ambil dari env
@@ -107,10 +150,15 @@ async function startBot() {
     sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
         if (connection === 'open') {
             console.log('✅ Bot terhubung ke WhatsApp!');
+            unregisteredFailCount = 0; // reset backoff, koneksi berhasil
             // Hentikan interval pairing jika masih berjalan
             if (refreshInterval) {
                 clearInterval(refreshInterval);
                 refreshInterval = null;
+            }
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
             }
             pairingRequested = true; // tandai sudah minta pairing (tidak perlu lagi)
             startAutoGroupScheduler(sock);
@@ -140,16 +188,39 @@ async function startBot() {
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
             console.log('❌ Koneksi terputus, status code:', statusCode);
 
+            // Bersihkan timer punya sesi ini supaya tidak numpuk dengan sesi baru
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+                countdownInterval = null;
+            }
+
+            botStarting = false; // izinkan startBot() dipanggil lagi
+
             if (isLoggedOut || statusCode === 401) {
                 // Sesi memang invalid (logout/unauthorized) -> auth_info WAJIB dihapus
                 // supaya proses pairing bisa diminta ulang dari awal.
                 console.log('🚫 Logged out atau unauthorized! Menghapus auth_info...');
                 fs.rmSync('auth_info', { recursive: true, force: true });
                 process.exit(0);
+            } else if (!state.creds.registered) {
+                // Belum berhasil pairing dan koneksi gagal lagi (mis. 405/408).
+                // JANGAN langsung retry dalam hitungan detik -> itu yang bikin
+                // WhatsApp menganggap ini spam pairing request dan menolak
+                // dengan 405 berulang-ulang, sekaligus bikin beberapa
+                // "🔢 KODE PAIRING" dan countdown numpuk.
+                // Pakai backoff yang makin lama tiap gagal berturut-turut.
+                unregisteredFailCount++;
+                const delaySec = Math.min(30 * unregisteredFailCount, 180); // maks 3 menit
+                console.log(`🔄 Belum ter-pairing (percobaan ke-${unregisteredFailCount}), reconnect dalam ${delaySec} detik...`);
+                setTimeout(startBot, delaySec * 1000);
             } else {
                 // Disconnect biasa/sementara (mis. restart required, koneksi putus)
-                // -> JANGAN hapus auth_info, cukup reconnect. Menghapusnya di sini
-                // akan memaksa pairing ulang tiap kali koneksi sedikit terganggu.
+                // setelah SUDAH pernah berhasil registered -> JANGAN hapus auth_info,
+                // cukup reconnect dengan jeda wajar.
                 console.log('🔄 Koneksi terputus sementara, reconnect tanpa hapus auth_info...');
                 setTimeout(startBot, 5000);
             }
