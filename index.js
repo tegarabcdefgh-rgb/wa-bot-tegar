@@ -270,7 +270,7 @@ startBot();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-    res.send('WhatsApp Bot Running');
+    res.send('WhatsAppp Bot Running');
 });
 
 app.listen(PORT, () => {
