@@ -84,6 +84,9 @@ let botStarting = false;
 // WhatsApp dalam waktu singkat (itu yang memicu server menolak dengan 405).
 let unregisteredFailCount = 0;
 
+// Interval refresh pairing code (dalam detik)
+const PAIRING_REFRESH_SECONDS = 90;
+
 async function startBot() {
     if (botStarting) {
         console.log('⏳ startBot() sudah berjalan, lewati pemanggilan ganda...');
@@ -138,7 +141,7 @@ async function startBot() {
             console.log('🔢 KODE PAIRING:', formatCode);
             console.log('====================\n');
             console.log('WhatsApp HP → Setelan → Perangkat tertaut → Tautkan perangkat → Tautkan dengan nomor telepon');
-            mulaiCountdown(55);
+            mulaiCountdown(PAIRING_REFRESH_SECONDS);
         } catch (err) {
             console.error('❌ Pairing gagal:', err.message);
             pairingRequested = false;
@@ -180,7 +183,7 @@ async function startBot() {
                     return;
                 }
                 await mintaPairingCode();
-            }, 55000);
+            }, PAIRING_REFRESH_SECONDS * 1000);
         }
 
         if (connection === 'close') {
