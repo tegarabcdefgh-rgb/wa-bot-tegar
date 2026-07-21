@@ -85,7 +85,7 @@ let botStarting = false;
 let unregisteredFailCount = 0;
 
 // Interval refresh pairing code (dalam detik)
-const PAIRING_REFRESH_SECONDS = 90;
+const PAIRING_REFRESH_SECONDS = 80;
 
 async function startBot() {
     if (botStarting) {
